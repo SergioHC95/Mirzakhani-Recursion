@@ -1,4 +1,5 @@
-# wp-recursion
+# Weil–Petersson Volumes and $\psi$-Class Intersection Numbers via Mirzakhani Recursion
+
 
 Mirzakhani-style recursion for intersection numbers with exact rational arithmetic and a simple on-disk cache.
 
@@ -22,7 +23,7 @@ Open **`notebooks/Intersection_Numbers_Tutorial.ipynb`**. It:
 import wp
 
 # Fill cache up to a degree bound and return a dict { (g,n,alpha): Fraction }
-rx = wp.iterate(nmax=6, cache_path="notebooks/.cache/wp_rx.pkl", max_workers=None, by_degree=True)
+rx = wp.iterate(dmax=6, cache_path="data/wp_rx.pkl", max_workers=None, fill_missing=True)
 
 # Convert normalized value to the actual intersection number
 from fractions import Fraction
