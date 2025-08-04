@@ -38,31 +38,19 @@ def alpha_bs(n: int, D: int) -> List[Alpha]:
     return out
 
 
-def split_index_sets(n_minus_1: int) -> List[Tuple[List[int], List[int]]]:
+def split_index_sets(n_minus_1: int):
     """
-    Unique unordered splits of indices {0,1,...,n_minus_1-1} into (I, J = complement),
-    avoiding (I, J) vs (J, I) duplicates.
-
-    Returns
-    -------
-    List[(I, J)]
-        Deterministic order; I and J are sorted lists.
-        Excludes the empty/whole-set split by construction (I nonempty).
+    Unordered bipartitions (I, J) of {0,..,n_minus_1-1}, unique up to swap.
     """
-    if n_minus_1 < 1:
-        return []
 
     inds = tuple(range(n_minus_1))
-    out: List[Tuple[List[int], List[int]]] = []
+    out = []
     half = n_minus_1 // 2
 
-    for r in range(1, half + 1):
+    for r in range(0, half + 1):      # <-- start at 0, not 1
         for I in combinations(inds, r):
             Iset = set(I)
             J = tuple(x for x in inds if x not in Iset)
-            # keep one representative per unordered pair:
-            # choose the lexicographically smaller by (len, tuple)
-            if (len(I), I) <= (len(J), J):
+            if (len(I), I) <= (len(J), J):  # keep a canonical representative
                 out.append((list(I), list(J)))
-
     return out

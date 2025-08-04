@@ -59,7 +59,7 @@ def _poly_pow_trunc(base: List[Fraction], exp: int, L: int) -> List[Fraction]:
     return res
 
 
-def genus0_x(l: int, alpha: Alpha) -> Fraction:
+def genus0_x(n: int, alpha: Alpha) -> Fraction:
     r"""
     Exact genus-0 closed form for
         X(0, n, α) = ⟨ τ_{α_1}\cdots τ_{α_n} ⟩_{g=0}
@@ -75,8 +75,8 @@ def genus0_x(l: int, alpha: Alpha) -> Fraction:
 
     Parameters
     ----------
-    l : int
-        Non-negative ψ-degree.
+    n : int
+        Number of punctures.
     alpha : Alpha
         Non-negative multi-index (length n), canonical or not.
 
@@ -85,11 +85,9 @@ def genus0_x(l: int, alpha: Alpha) -> Fraction:
     Fraction
         The exact intersection number.
     """
-    if l < 0 or any(a < 0 for a in alpha):
-        return Fraction(0)
 
     A = sum(alpha)
-    n = l + 3 + A
+    l = n - 3 - A
     r = n - 2  # exponent on H(u)
 
     # Build S(u) = sum_{k=0..l} (-1)^k / (k!(k+1)!) * u^k, truncated at u^l.

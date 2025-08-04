@@ -17,18 +17,7 @@ CACHE.parent.mkdir(parents=True, exist_ok=True)
 
 Alpha = Tuple[int, ...]
 Key = tuple[int, int, tuple[int, ...]]
-__all__ = ["intersection_number", "allowed_alphas"]
-
-def allowed_alphas(g: int, n: int) -> List[Alpha]:
-    """
-    All canonical, nonincreasing α of length n allowed for ⟨τ^α⟩_g,
-    i.e., sum(α) = 3g - 3 + n. Deterministic (reverse-lex) order.
-    """
-    D = degree(g, n)
-    if D < 0 or not is_stable(g, n):
-        return []
-    # alpha_bs returns all α with sum(α) ≤ D; filter to the exact degree.
-    return [a for a in alpha_bs(n, D) if sum(a) == D]
+__all__ = ["intersection_number"]
 
 def intersection_number(
     g: int,

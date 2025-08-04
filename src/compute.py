@@ -26,6 +26,8 @@ from .partitions import alpha_bs
 from .recursion import rx_rec_opt
 from .store import canonical, dump_rx_atomic, load_rx
 from .types import Alpha, Job, Key
+from .genus0 import genus0_x
+from .normalization import rx_from_x
 
 __all__ = [
     "degree",
@@ -172,6 +174,20 @@ def _compute_gn(
     if not alpha_list:
         return {}
 
+    # Special-case exact genus-0 formula
+    if g == 0:
+        log.info("Using genus-0 closed formula for %d α’s at (g=0, n=%d)", len(alpha_list), n)
+        results = {}
+        for i, alpha in enumerate(alpha_list):
+            if sum(alpha) != degree(0, n):
+                continue  # genus-0 x is only defined at top degree
+            X = genus0_x(n, alpha)
+            RX = rx_from_x(0, n, alpha, X)
+            results[alpha] = RX
+            if checkpoint_fn:
+                checkpoint_fn(i, alpha)
+        return results
+
     snapshot = dict(rx)  # Ensure isolation from mutations
 
     results: Dict[Alpha, Fraction] = {}
@@ -235,6 +251,7 @@ def _compute_gn(
                     checkpoint_fn(i, alpha)
         finally:
             pass  # no global to clean up
+
         return results
 
     # Parallel path

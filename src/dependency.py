@@ -19,16 +19,24 @@ def canonical(alpha: Alpha) -> Alpha:
     return tuple(sorted(alpha, reverse=True))
 
 
-def split_index_sets(n: int):
-    indices = list(range(n))
-    seen = set()
-    for i in range(1, n):
-        for combo in combinations(indices, i):
-            I = tuple(sorted(combo))
-            J = tuple(sorted(set(indices) - set(I)))
-            if (J, I) not in seen:
-                seen.add((I, J))
-                yield I, J
+def split_index_sets(n_minus_1: int):
+    """
+    Unordered bipartitions (I, J) of {0,..,n_minus_1-1}, unique up to swap.
+    Include the empty subset case to match Mathematica's Subsets[..., k].
+    """
+    inds = tuple(range(n_minus_1))
+    out: List[Tuple[List[int], List[int]]] = []
+    half = n_minus_1 // 2
+
+    for r in range(0, half + 1):  # <-- start at 0, not 1
+        for I in combinations(inds, r):
+            Iset = set(I)
+            J = tuple(x for x in inds if x not in Iset)
+            # keep one representative per unordered pair:
+            if (len(I), I) <= (len(J), J):
+                out.append((list(I), list(J)))
+    return out
+
 
 
 def format_node(key: Key) -> str:
