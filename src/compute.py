@@ -4,8 +4,7 @@ Compute driver for Weil–Petersson intersection numbers.
 - Orchestrates generation of R_X(g, n; α) values by (g, n) slices.
 - Supports parallel evaluation with a per-process read-only snapshot to
   avoid re-sending the cache on every task (Windows-safe).
-- Exposes a simple iterator `iterate(...)` that incrementally fills and
-  checkpoints a pickle cache after each (g, n).
+- Exposes an iterator `iterate(...)` that fills and checkpoints a pickle cache.
 
 Conventions
 -----------
@@ -14,12 +13,32 @@ Conventions
 """
 
 from __future__ import annotations
-from tqdm import tqdm
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from fractions import Fraction
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Callable
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED, Future
+from fractions import Fraction
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
+
+from rich import box
+from rich.console import Console, Group
+from rich.live import Live
+from rich.table import Table
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    BarColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    TaskProgressColumn,
+    TextColumn,
+)
+try:
+    # Rich >=13 provides MofNColumn for x/y; if unavailable, we'll emulate via description text.
+    from rich.progress import MofNColumn
+    _HAVE_MOFN = True
+except Exception:
+    _HAVE_MOFN = False
 
 from .logging_config import get_logger
 from .partitions import alpha_bs
@@ -28,6 +47,7 @@ from .store import canonical, dump_rx_atomic, load_rx
 from .types import Alpha, Job, Key
 from .genus0 import genus0_x
 from .normalization import rx_from_x
+
 
 __all__ = [
     "degree",
@@ -71,11 +91,14 @@ def ordered_pairs(dmax: int) -> List[Tuple[int, int]]:
     All stable (g, n) such that degree(g, n) ≤ dmax,
     sorted by degree, then lexicographically by (g, n).
     """
-    pairs = [(g, n)
-             for g in range(dmax + 1)
-             for n in range(1, 3 * dmax + 4)  # generous upper bound on n
-             if is_stable(g, n) and degree(g, n) <= dmax]
+    pairs = [
+        (g, n)
+        for g in range(dmax + 1)
+        for n in range(1, 3 * dmax + 4)  # generous upper bound on n
+        if is_stable(g, n) and degree(g, n) <= dmax
+    ]
     return sorted(pairs, key=lambda t: (degree(*t), *t))
+
 
 def known_pairs(rx: Dict[Key, Fraction]) -> Set[Tuple[int, int]]:
     """Set of (g, n) that already have at least one α in `rx`."""
@@ -86,30 +109,42 @@ def missing_alphas(g: int, n: int, rx: Dict[Key, Fraction]) -> List[Alpha]:
     """
     Canonical α’s required for (g, n) at total degree D = 3g - 3 + n,
     minus those already present in `rx`. Deterministic reverse-lex order.
+
+    NOTE: We include all α with sum(α) ≤ D for all genus, so genus-0
+    is treated uniformly (your closed form handles all α).
     """
     D = degree(g, n)
-    need = set(alpha_bs(n, D))           # already canonical, sum(α) ≤ D
+    need = set(alpha_bs(n, D))  # already canonical, sum(α) ≤ D
     have = {a for (gg, nn, a) in rx if gg == g and nn == n}
     return sorted(need - have, reverse=True)
 
 
 # -------------------------------- worker logic --------------------------------
 
-def _worker(job: Job) -> Tuple[Alpha, Fraction]:
+def _worker(job: Job) -> Tuple[Alpha, Fraction, float, int]:
     """
-    Compute a single R_X(g, n; α).
+    Compute a single R_X(g, n; α) value using the recursive optimizer.
 
-    Uses a per-process read-only snapshot (_SNAPSHOT) for dependency lookups and
-    a small per-task local cache for transitive dependencies within the same job.
+    This function runs in a separate process (via ProcessPoolExecutor).
+    Uses a global read-only snapshot (_SNAPSHOT) for previously computed values
+    and maintains a local cache for intermediate dependencies within this task.
+
+    Returns
+    -------
+    (alpha_can, result, elapsed_seconds, pid)
     """
-    snapshot: Dict[Key, Fraction] = _SNAPSHOT or {}
+    t0 = time.time()
+    pid = os.getpid()
+
     alpha_can = canonical(job.alpha)
     target_key: Key = (job.g, job.n, alpha_can)
 
-    local_cache: Dict[Key, Fraction] = {}
-    inflight: Set[Key] = set()
+    snapshot: Dict[Key, Fraction] = _SNAPSHOT or {}  # shared read-only cache
+    local_cache: Dict[Key, Fraction] = {}            # local per-job cache
+    inflight: Set[Key] = set()                       # detect circular dependencies
 
     def compute_key(key: Key) -> Fraction:
+        """Compute value for (g, n, α) recursively, with memoization."""
         if key in local_cache:
             return local_cache[key]
         if key in snapshot:
@@ -136,22 +171,73 @@ def _worker(job: Job) -> Tuple[Alpha, Fraction]:
         return val
 
     def rx_lookup(g: int, n: int, alpha: Alpha) -> Fraction:
+        """Lookup for rx_rec_opt: canonicalize, prevent self-query, then compute."""
         key = (g, n, canonical(alpha))
         if key in local_cache:
             return local_cache[key]
         if key in snapshot:
             return snapshot[key]
-        if key == target_key:  # defensive: recurrence must not self-query
-            raise KeyError(key)
+        if key == target_key:
+            raise KeyError(f"Recurrence attempted to look up itself: {key}")
         return compute_key(key)
 
-    # Always call the recurrence with the canonical alpha
+    # Final evaluation of R_X
     val = rx_rec_opt(job.g, job.n, alpha_can, rx_lookup)
     local_cache[target_key] = val
-    return alpha_can, val
+    elapsed = time.time() - t0
+
+    return alpha_can, val, elapsed, pid
 
 
 # ------------------------------- driver routines ------------------------------
+
+def _build_worker_table(g: int, n: int, stats: Dict[int, Tuple[int, float, float]]) -> Table:
+    """
+    Build a Rich table summarizing per-worker activity.
+
+    Parameters
+    ----------
+    stats : dict pid -> (count, total_time, last_time)
+
+    Returns
+    -------
+    Table
+    """
+    # Build enhanced worker stats table (sorted + styled)
+    table = Table(title=f"Worker Stats", box=box.MINIMAL_DOUBLE_HEAD)
+    table.add_column("PID", justify="right")
+    table.add_column("Tasks", justify="right")
+    table.add_column("Total (s)", justify="right")
+    table.add_column("Avg (s)", justify="right")
+    table.add_column("Last (s)", justify="right")
+
+    # Highlighting thresholds
+    avg_thresh = 25.0
+    last_thresh = 50.0
+
+    # Sort by task count descending
+    sorted_items = sorted(stats.items(), key=lambda x: x[1][0], reverse=True)
+
+    for pid, (count, total, last) in sorted_items:
+        avg = total / count if count > 0 else 0.0
+
+        avg_str = f"[yellow]{avg:.2f}[/yellow]" if avg > avg_thresh else f"{avg:.2f}"
+        last_str = f"[red]{last:.2f}[/red]" if last > last_thresh else f"{last:.2f}"
+
+        table.add_row(
+            str(pid),
+            str(count),
+            f"{total:.2f}",
+            avg_str,
+            last_str,
+        )
+
+
+    for pid, (count, total_t, last_t) in sorted(stats.items()):
+        avg = total_t / count if count else 0.0
+        table.add_row(str(pid), str(count), f"{total_t:.2f}", f"{avg:.2f}", f"{last_t:.2f}")
+    return table
+
 
 def _compute_gn(
     g: int,
@@ -174,106 +260,113 @@ def _compute_gn(
     if not alpha_list:
         return {}
 
-    # Special-case exact genus-0 formula
+    # Genus-0: closed form valid for all α with sum(α) ≤ D
     if g == 0:
-        log.info("Using genus-0 closed formula for %d α’s at (g=0, n=%d)", len(alpha_list), n)
-        results = {}
+        results: Dict[Alpha, Fraction] = {}
         for i, alpha in enumerate(alpha_list):
-            if sum(alpha) != degree(0, n):
-                continue  # genus-0 x is only defined at top degree
-            X = genus0_x(n, alpha)
-            RX = rx_from_x(0, n, alpha, X)
+            X = genus0_x(n, alpha)             # your closed form
+            RX = rx_from_x(0, n, alpha, X)     # normalized R_X
             results[alpha] = RX
             if checkpoint_fn:
                 checkpoint_fn(i, alpha)
         return results
 
-    snapshot = dict(rx)  # Ensure isolation from mutations
-
+    # Snapshot for workers (ensure isolation from mutations)
+    snapshot = dict(rx)
     results: Dict[Alpha, Fraction] = {}
 
-    # Sequential path
+    # Sequential path (helpful for debugging)
     if max_workers == 1:
-        snapshot_local = snapshot  # avoid using global
-        def worker_local(job: Job) -> Tuple[Alpha, Fraction]:
-            alpha_can = canonical(job.alpha)
-            target_key: Key = (job.g, job.n, alpha_can)
-
-            local_cache: Dict[Key, Fraction] = {}
-            inflight: Set[Key] = set()
-
-            def compute_key(key: Key) -> Fraction:
-                if key in local_cache:
-                    return local_cache[key]
-                if key in snapshot_local:
-                    return snapshot_local[key]
-                if key in inflight:
-                    raise RuntimeError(f"Dependency cycle detected at {key}")
-                inflight.add(key)
-
-                gk, nk, ak = key
-
-                def dep_lookup(g: int, n: int, alpha: Alpha) -> Fraction:
-                    k = (g, n, canonical(alpha))
-                    if k in local_cache:
-                        return local_cache[k]
-                    if k in snapshot_local:
-                        return snapshot_local[k]
-                    if k in inflight:
-                        raise RuntimeError(f"Dependency cycle detected at {k}")
-                    return compute_key(k)
-
-                val = rx_rec_opt(gk, nk, ak, dep_lookup)
-                local_cache[key] = val
-                inflight.remove(key)
-                return val
-
-            def rx_lookup(g: int, n: int, alpha: Alpha) -> Fraction:
-                key = (g, n, canonical(alpha))
-                if key in local_cache:
-                    return local_cache[key]
-                if key in snapshot_local:
-                    return snapshot_local[key]
-                if key == target_key:  # defensive: recurrence must not self-query
-                    raise KeyError(key)
-                return compute_key(key)
-
-            # Always call the recurrence with the canonical alpha
-            val = rx_rec_opt(job.g, job.n, alpha_can, rx_lookup)
-            local_cache[target_key] = val
-            return alpha_can, val
-
-        try:
-            for i, a in enumerate(alpha_list):
-                alpha, val = worker_local(Job(g, n, a))
-                results[alpha] = val
-                if checkpoint_fn is not None:
-                    checkpoint_fn(i, alpha)
-        finally:
-            pass  # no global to clean up
-
+        for i, a in enumerate(alpha_list):
+            alpha, val, _, _ = _worker(Job(g, n, a))
+            results[alpha] = val
+            if checkpoint_fn is not None:
+                checkpoint_fn(i, alpha)
         return results
 
-    # Parallel path
-    try:
-        with ProcessPoolExecutor(
-            max_workers=max_workers,
-            initializer=_init_snapshot,
-            initargs=(snapshot,),
-        ) as ex:
-            futs = {ex.submit(_worker, Job(g, n, a)): (i, a) for i, a in enumerate(alpha_list)}
-            for fut in tqdm(as_completed(futs), total=len(futs), desc=f"(g={g}, n={n})"):
-                i, label = futs[fut]
-                try:
-                    alpha, val = fut.result()
-                except Exception as e:
-                    raise RuntimeError(f"Failed at (g={g}, n={n}, α={label}): {e}") from e
-                results[alpha] = val
-                if checkpoint_fn is not None:
-                    checkpoint_fn(i, alpha)
-    except KeyboardInterrupt:
-        raise  # ensure Ctrl+C still works
+    # ---------------------------- Parallel path --------------------------------
+    # Robust Rich rendering on Windows / IDE terminals: force a real terminal.
+    console = Console(force_terminal=True, highlight=False, soft_wrap=False)
+
+    # Global progress bar configuration
+    progress_columns = [
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+    ]
+    if _HAVE_MOFN:
+        progress_columns.append(MofNColumn())  # shows x/y
+    progress_columns.extend([
+        TaskProgressColumn(),                  # percentage
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    ])
+
+    progress = Progress(*progress_columns, transient=False, console=console)
+    task_id = progress.add_task(f"Computing {len(alpha_list)} α’s for (g={g}, n={n})", total=len(alpha_list))
+
+    with ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_init_snapshot,
+        initargs=(snapshot,),
+    ) as ex:
+
+        futures: List[Future] = []
+        fut_to_label: Dict[Future, Tuple[int, Alpha]] = {}
+        for i, a in enumerate(alpha_list):
+            fut = ex.submit(_worker, Job(g, n, a))
+            futures.append(fut)
+            fut_to_label[fut] = (i, a)
+
+        worker_stats: Dict[int, Tuple[int, float, float]] = {}  # pid -> (count, total_time, last_time)
+
+        # Live layout: progress + table; refresh even when no futures complete.
+        with Live(Group(progress, _build_worker_table(g, n, worker_stats)),
+                  refresh_per_second=5, console=console, screen=False) as live:
+
+            remaining: Set[Future] = set(futures)
+            t_start = time.time()
+
+            while remaining:
+                done, _ = wait(remaining, timeout=0.2, return_when=FIRST_COMPLETED)
+                if not done:
+                    # No completions yet; just refresh the display.
+                    live.update(Group(progress, _build_worker_table(g, n, worker_stats)))
+                    continue
+
+                for fut in done:
+                    remaining.remove(fut)
+                    i, label = fut_to_label[fut]
+                    try:
+                        alpha, val, elapsed, pid = fut.result()
+                    except Exception as e:
+                        raise RuntimeError(f"Failed at (g={g}, n={n}, α={label}): {e}") from e
+
+                    # Update results and checkpoint
+                    results[alpha] = val
+                    if checkpoint_fn is not None:
+                        checkpoint_fn(i, alpha)
+
+                    # Update worker stats
+                    count, total_t, _ = worker_stats.get(pid, (0, 0.0, 0.0))
+                    worker_stats[pid] = (count + 1, total_t + elapsed, elapsed)
+
+                    # Advance progress
+                    progress.update(task_id, advance=1)
+
+                    # Rebuild table and refresh UI
+                    table = _build_worker_table(g, n, worker_stats)
+
+                    # Optional: add a tiny throughput/summary line below the bar
+                    done_so_far = len(futures) - len(remaining)
+                    elapsed_all = max(1e-9, time.time() - t_start)
+                    throughput = done_so_far / elapsed_all
+                    summary = TextColumn(f"[grey70]Throughput: {throughput:.2f} tasks/s")
+                    # Render progress + summary + table
+                    live.update(Group(progress, table))
+
     return results
+
 
 def compute_pair_gn(g: int, n: int, rx: Dict[Key, Fraction], max_workers: Optional[int]) -> Dict[Alpha, Fraction]:
     """Compute all α with sum(α) ≤ D for the given (g, n)."""
@@ -284,10 +377,6 @@ def compute_missing_gn(g: int, n: int, rx: Dict[Key, Fraction], max_workers: Opt
     """Compute only the α not present in `rx` for the given (g, n)."""
     return _compute_gn(g, n, missing_alphas(g, n, rx), rx, max_workers)
 
-
-import time
-from typing import Optional, Dict
-from fractions import Fraction
 
 def iterate(
     dmax: int,
@@ -318,27 +407,28 @@ def iterate(
     """
     rx: Dict[Key, Fraction] = load_rx(cache_path)
 
-    # Track time for periodic checkpointing
+    # Periodic checkpointing
     last_save_time = time.monotonic()
-    checkpoint_interval = 600 ###3600  # seconds (1 hour)
+    checkpoint_interval = 3600  # seconds (1 hour)
 
     for (g, n) in ordered_pairs(dmax):
+        # Only proceed if there’s work to do
         want = missing_alphas(g, n, rx) if fill_missing else list(alpha_bs(n, degree(g, n)))
         if not want:
-            continue
+            continue  # skip fully computed (g, n)
 
         mode = "missing" if fill_missing else "full"
         workers_str = "seq" if max_workers == 1 else (str(max_workers) if max_workers else "default")
-        log.info("Computing (g=%d, n=%d): %d α’s (mode=%s, workers=%s)", g, n, len(want), mode, workers_str)
+        log.info(f"Computing (g={g}, n={n}): {len(want)} α’s (workers={workers_str})")
 
-        # Define checkpoint callback function to be called during _compute_gn
-        def checkpoint_fn(i: int, alpha: Alpha, g=g, n=n):
+        # Periodic checkpoint callback, closed over `rx`
+        def checkpoint_fn(i: int, alpha: Alpha, g=g, n=n) -> None:
             nonlocal last_save_time
             now = time.monotonic()
             if now - last_save_time > checkpoint_interval:
                 dump_rx_atomic(cache_path, rx)
                 last_save_time = now
-                log.info("⏳ Periodic checkpoint at α #%d = %s during (g=%d, n=%d)", i, alpha, g, n)
+                log.info(f"⏳ Periodic checkpoint at α #{i} = {alpha} during (g={g}, n={n})")
 
         # Compute with periodic checkpointing
         res = _compute_gn(g, n, want, rx, max_workers, checkpoint_fn=checkpoint_fn)
@@ -349,6 +439,6 @@ def iterate(
 
         dump_rx_atomic(cache_path, rx)
         last_save_time = time.monotonic()  # reset timer after full (g, n) checkpoint
-        log.info("✅ Final checkpoint saved for (g=%d, n=%d)", g, n)
+        log.info(f"✅ Final checkpoint saved for (g={g}, n={n})")
 
     return rx

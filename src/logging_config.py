@@ -6,8 +6,8 @@ def get_logger(name: str) -> logging.Logger:
     if not log.handlers:
         handler = logging.StreamHandler(sys.stdout)
         fmt = logging.Formatter(
-            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-            datefmt="%H:%M:%S",
+            fmt="%(asctime)s | %(message)s",
+            datefmt="%H:%M:%S"
         )
         handler.setFormatter(fmt)
         log.addHandler(handler)
