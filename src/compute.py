@@ -232,10 +232,6 @@ def _build_worker_table(g: int, n: int, stats: Dict[int, Tuple[int, float, float
             last_str,
         )
 
-
-    for pid, (count, total_t, last_t) in sorted(stats.items()):
-        avg = total_t / count if count else 0.0
-        table.add_row(str(pid), str(count), f"{total_t:.2f}", f"{avg:.2f}", f"{last_t:.2f}")
     return table
 
 
