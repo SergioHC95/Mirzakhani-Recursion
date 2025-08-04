@@ -212,8 +212,8 @@ def _build_worker_table(g: int, n: int, stats: Dict[int, Tuple[int, float, float
     table.add_column("Last (s)", justify="right")
 
     # Highlighting thresholds
-    avg_thresh = 25.0
-    last_thresh = 50.0
+    avg_thresh = 100.0
+    last_thresh = 500.0 
 
     # Sort by task count descending
     sorted_items = sorted(stats.items(), key=lambda x: x[1][0], reverse=True)

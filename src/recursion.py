@@ -138,111 +138,111 @@ def rx_rec_opt(g: int, n: int, alpha: Alpha, rx_lookup: Callable[[int,int,Alpha]
 
 
 
-from fractions import Fraction
-from typing import Tuple, Callable
-from sympy import Symbol, Rational
-from sympy.core.expr import Expr
+# from fractions import Fraction
+# from typing import Tuple, Callable
+# from sympy import Symbol, Rational
+# from sympy.core.expr import Expr
 
-Alpha = Tuple[int, ...]  # or import your Alpha
-# You must have these available from your codebase:
-#   - A_k(k: int) -> Fraction
-#   - split_index_sets(n_minus_1: int) -> Iterable[Tuple[List[int], List[int]]]
+# Alpha = Tuple[int, ...]  # or import your Alpha
+# # You must have these available from your codebase:
+# #   - A_k(k: int) -> Fraction
+# #   - split_index_sets(n_minus_1: int) -> Iterable[Tuple[List[int], List[int]]]
 
-def _rat(x: Fraction | int) -> Rational:
-    """Convert Python int/Fraction -> SymPy Rational."""
-    if isinstance(x, Fraction):
-        return Rational(x.numerator, x.denominator)
-    return Rational(x, 1)
+# def _rat(x: Fraction | int) -> Rational:
+#     """Convert Python int/Fraction -> SymPy Rational."""
+#     if isinstance(x, Fraction):
+#         return Rational(x.numerator, x.denominator)
+#     return Rational(x, 1)
 
-# Optional: a symbol factory so every (g,n,alpha) maps to a single Symbol
-_X_cache: dict[tuple[int,int,Alpha], Symbol] = {}
-def X_sym(g: int, n: int, alpha: Alpha) -> Symbol:
-    key = (g, n, alpha)
-    s = _X_cache.get(key)
-    if s is None:
-        s = Symbol(f"X[{g},{n},{alpha}]")
-        _X_cache[key] = s
-    return s
+# # Optional: a symbol factory so every (g,n,alpha) maps to a single Symbol
+# _X_cache: dict[tuple[int,int,Alpha], Symbol] = {}
+# def X_sym(g: int, n: int, alpha: Alpha) -> Symbol:
+#     key = (g, n, alpha)
+#     s = _X_cache.get(key)
+#     if s is None:
+#         s = Symbol(f"X[{g},{n},{alpha}]")
+#         _X_cache[key] = s
+#     return s
 
-def rx_rec_opt_symbolic(g: int, n: int, alpha: Alpha) -> Expr:
-    """
-    Symbolic version of the Mirzakhani-style RX recursion:
-    replaces every dependency RX(g',n',alpha') with the symbol X[g',n',alpha'].
-    Returns a SymPy expression with exact rationals.
-    """
-    alpha = tuple(sorted(alpha, reverse=True))
+# def rx_rec_opt_symbolic(g: int, n: int, alpha: Alpha) -> Expr:
+#     """
+#     Symbolic version of the Mirzakhani-style RX recursion:
+#     replaces every dependency RX(g',n',alpha') with the symbol X[g',n',alpha'].
+#     Returns a SymPy expression with exact rationals.
+#     """
+#     alpha = tuple(sorted(alpha, reverse=True))
 
-    # Base seeds (as exact rationals)
-    if g == 0 and n == 3 and alpha == (0, 0, 0):
-        return Rational(1, 1)
-    if g == 1 and n == 1 and alpha == (0,):
-        return Rational(1, 24)
-    if g == 1 and n == 1 and alpha == (1,):
-        return Rational(1, 2)
+#     # Base seeds (as exact rationals)
+#     if g == 0 and n == 3 and alpha == (0, 0, 0):
+#         return Rational(1, 1)
+#     if g == 1 and n == 1 and alpha == (0,):
+#         return Rational(1, 24)
+#     if g == 1 and n == 1 and alpha == (1,):
+#         return Rational(1, 2)
 
-    # Stability of the target
-    if not (n >= 1 and (2*g - 2 + n) > 0):
-        return Rational(0, 1)
+#     # Stability of the target
+#     if not (n >= 1 and (2*g - 2 + n) > 0):
+#         return Rational(0, 1)
 
-    l = 3*g - 3 + n - sum(alpha)
-    if l < 0:
-        return Rational(0, 1)
+#     l = 3*g - 3 + n - sum(alpha)
+#     if l < 0:
+#         return Rational(0, 1)
 
-    total: Expr = Rational(0, 1)
+#     total: Expr = Rational(0, 1)
 
-    alpha_sorted = list(alpha)
-    alpha1 = alpha_sorted[-1]
+#     alpha_sorted = list(alpha)
+#     alpha1 = alpha_sorted[-1]
 
-    for k in range(0, l + 1):
-        ck = _rat(A_k(k))
-        if ck == 0:
-            continue
+#     for k in range(0, l + 1):
+#         ck = _rat(A_k(k))
+#         if ck == 0:
+#             continue
 
-        # --- Term (g, n-1)
-        if n - 1 >= 1:
-            inner1: Expr = Rational(0, 1)
-            for j in range(0, n - 1):
-                a2 = alpha1 + alpha_sorted[j] + k - 1
-                if a2 >= 0:
-                    new_vec = [alpha_sorted[i] for i in range(n - 1) if i != j]
-                    new_vec.append(a2)
-                    new_alpha = tuple(sorted(new_vec, reverse=True))
-                    coeff = Rational(2*alpha_sorted[j] + 1, 1)
-                    inner1 += coeff * X_sym(g, n - 1, new_alpha)
-            total += ck * inner1
+#         # --- Term (g, n-1)
+#         if n - 1 >= 1:
+#             inner1: Expr = Rational(0, 1)
+#             for j in range(0, n - 1):
+#                 a2 = alpha1 + alpha_sorted[j] + k - 1
+#                 if a2 >= 0:
+#                     new_vec = [alpha_sorted[i] for i in range(n - 1) if i != j]
+#                     new_vec.append(a2)
+#                     new_alpha = tuple(sorted(new_vec, reverse=True))
+#                     coeff = Rational(2*alpha_sorted[j] + 1, 1)
+#                     inner1 += coeff * X_sym(g, n - 1, new_alpha)
+#             total += ck * inner1
 
-        # --- Term (g-1, n+1)
-        m = k + alpha1 - 2
-        if g > 0 and m >= 0:
-            inner2 = Rational(0, 1)
-            for d1 in range(0, m // 2 + 1):     # <= half to avoid double counting
-                d2 = m - d1
-                sym = Rational(1, 2) if d1 == d2 else Rational(1, 1)
-                new_vec = alpha_sorted[:-1] + [d1, d2]
-                new_alpha = tuple(sorted(new_vec, reverse=True))
-                inner2 += sym * X_sym(g - 1, n + 1, new_alpha)
-            total += ck * Rational(4, 1) * inner2
+#         # --- Term (g-1, n+1)
+#         m = k + alpha1 - 2
+#         if g > 0 and m >= 0:
+#             inner2 = Rational(0, 1)
+#             for d1 in range(0, m // 2 + 1):     # <= half to avoid double counting
+#                 d2 = m - d1
+#                 sym = Rational(1, 2) if d1 == d2 else Rational(1, 1)
+#                 new_vec = alpha_sorted[:-1] + [d1, d2]
+#                 new_alpha = tuple(sorted(new_vec, reverse=True))
+#                 inner2 += sym * X_sym(g - 1, n + 1, new_alpha)
+#             total += ck * Rational(4, 1) * inner2
 
 
-        # --- Splitting term
-        fac_n1 = Rational(1,2) if n == 1 else Rational(1,1)
-        up = k + alpha1 - 2
-        if up >= 0:
-            split_sum: Expr = Rational(0, 1)
-            for I, J in split_index_sets(n - 1):   # should mirror your Mathematica
-                vecI = [alpha_sorted[i] for i in I]
-                vecJ = [alpha_sorted[j] for j in J]
-                for d in range(0, up + 1):
-                    a1 = tuple(sorted(vecI + [d], reverse=True))
-                    a2 = tuple(sorted(vecJ + [up - d], reverse=True))
-                    for g1 in range(0, g + 1):
-                        g2 = g - g1
-                        n1, n2 = len(a1), len(a2)
-                        l1 = 3*g1 - 3 + n1 - sum(a1)
-                        l2 = 3*g2 - 3 + n2 - sum(a2)
-                        if l1 >= 0 and l2 >= 0:
-                            split_sum += X_sym(g1, n1, a1) * X_sym(g2, n2, a2)
-            if split_sum != 0:
-                total += ck * Rational(4, 1) * fac_n1 * split_sum
+#         # --- Splitting term
+#         fac_n1 = Rational(1,2) if n == 1 else Rational(1,1)
+#         up = k + alpha1 - 2
+#         if up >= 0:
+#             split_sum: Expr = Rational(0, 1)
+#             for I, J in split_index_sets(n - 1):   # should mirror your Mathematica
+#                 vecI = [alpha_sorted[i] for i in I]
+#                 vecJ = [alpha_sorted[j] for j in J]
+#                 for d in range(0, up + 1):
+#                     a1 = tuple(sorted(vecI + [d], reverse=True))
+#                     a2 = tuple(sorted(vecJ + [up - d], reverse=True))
+#                     for g1 in range(0, g + 1):
+#                         g2 = g - g1
+#                         n1, n2 = len(a1), len(a2)
+#                         l1 = 3*g1 - 3 + n1 - sum(a1)
+#                         l2 = 3*g2 - 3 + n2 - sum(a2)
+#                         if l1 >= 0 and l2 >= 0:
+#                             split_sum += X_sym(g1, n1, a1) * X_sym(g2, n2, a2)
+#             if split_sum != 0:
+#                 total += ck * Rational(4, 1) * fac_n1 * split_sum
 
-    return total
+#     return total

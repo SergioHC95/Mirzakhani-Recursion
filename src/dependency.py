@@ -45,16 +45,28 @@ def format_node(key: Key) -> str:
 
 
 class DependencyGraph:
+    """
+    Builds the full dependency graph of (g, n, alpha) triples used in the
+    finite recursion that computes intersection numbers via rx_rec_opt.
+
+    The graph maps each (g, n, alpha) node to its set of direct recursive dependencies,
+    reflecting every rx_lookup call made during the computation.
+
+    This version exactly matches the logic of rx_rec_opt.
+    """
+
     def __init__(self):
         self.graph: Dict[Key, Set[Key]] = defaultdict(set)
         self.visited: Set[Key] = set()
 
     def build(self, g: int, n: int, alpha: Alpha):
+        """Build the full dependency graph rooted at (g, n, alpha)."""
         root = (g, n, canonical(alpha))
         self._dfs(root)
         return self.graph
 
     def _dfs(self, key: Key):
+        """Depth-first traversal to recursively build dependencies."""
         if key in self.visited:
             return
         self.visited.add(key)
@@ -62,10 +74,12 @@ class DependencyGraph:
         g, n, alpha = key
         alpha = canonical(alpha)
 
+        # Base cases: known seed values, no dependencies
         if (g == 0 and n == 3 and alpha == (0, 0, 0)) or \
            (g == 1 and n == 1 and alpha in [(0,), (1,)]):
             return
 
+        # Moduli space must be stable
         if not is_stable(g, n):
             return
 
@@ -77,13 +91,16 @@ class DependencyGraph:
         alpha1 = alpha_sorted[-1] if alpha_sorted else 0
 
         for k in range(D + 1):
-            # (g, n-1)
+            # Optional: skip if A_k(k) = 0 (insert real A_k(k) test here if desired)
+            # if A_k(k) == 0:
+            #     continue
+
+            # --- First branch: (g, n-1)
             if n - 1 >= 1 and is_stable(g, n - 1):
                 for j in range(n - 1):
-                    if j == len(alpha_sorted) - 1:
-                        continue
                     a2 = alpha1 + alpha_sorted[j] + k - 1
                     if a2 >= 0:
+                        # Drop entries at j and the last (min), add a2
                         new_vec = [alpha_sorted[i] for i in range(n - 1) if i != j]
                         new_vec.append(a2)
                         new_alpha = canonical(tuple(new_vec))
@@ -91,29 +108,26 @@ class DependencyGraph:
                         self.graph[key].add(dep)
                         self._dfs(dep)
 
-            # (g-1, n+1)
-            if g > 0:
-                dm = k + alpha1 - 2
-                if dm >= 0 and dm % 2 == 0:
-                    dm //= 2
-                    for d1 in range(dm + 1):
-                        d2 = 2 * dm - d1
-                        new_vec = alpha_sorted[:-1] + [d1, d2]
-                        new_alpha = canonical(tuple(new_vec))
-                        dep = (g - 1, n + 1, new_alpha)
-                        self.graph[key].add(dep)
-                        self._dfs(dep)
+            # --- Second branch: (g-1, n+1)
+            m = k + alpha1 - 2
+            if g > 0 and m >= 0:
+                for d1 in range(m // 2 + 1):
+                    d2 = m - d1
+                    new_vec = alpha_sorted[:-1] + [d1, d2]
+                    new_alpha = canonical(tuple(new_vec))
+                    dep = (g - 1, n + 1, new_alpha)
+                    self.graph[key].add(dep)
+                    self._dfs(dep)
 
-            # Splitting
-            up = k + alpha1 - 2
-            if up >= 0:
+            # --- Third branch: splitting into (g1, n1), (g2, n2)
+            if n - 1 >= 1 and m >= 0:
                 for I, J in split_index_sets(n - 1):
-                    for d in range(up + 1):
+                    for d in range(m + 1):
                         vecI = [alpha_sorted[i] for i in I]
                         vecJ = [alpha_sorted[j] for j in J]
                         a1 = canonical(tuple(vecI + [d]))
-                        a2 = canonical(tuple(vecJ + [up - d]))
-                        for g1 in range(0, g + 1):
+                        a2 = canonical(tuple(vecJ + [m - d]))
+                        for g1 in range(g + 1):
                             g2 = g - g1
                             n1, n2 = len(a1), len(a2)
                             if all([
@@ -128,6 +142,7 @@ class DependencyGraph:
                                 self.graph[key].add(dep2)
                                 self._dfs(dep1)
                                 self._dfs(dep2)
+
 
     def as_edges(self) -> List[Tuple[Key, Key]]:
         return [(src, dst) for src, dsts in self.graph.items() for dst in dsts]
