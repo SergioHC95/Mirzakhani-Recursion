@@ -1,0 +1,59 @@
+# Byte-compiled Python files
+__pycache__/
+*.py[cod]
+
+# Compiled binaries and dynamic libs
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Notebook output cache or scratch
+*.tmp
+*.log
+*.bak
+*.swp
+*.swo
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project data artifacts (heavy or generated files)
+data/*.pkl
+data/*.zst
+data/*.npz
+data/*.npy
+data/*.joblib
+
+# DOT/Graphviz output
+*.dot
+*.pdf
+*.svg
+*.gv
+
+# Pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.cache
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Custom to your project
+sitecustomize.py
