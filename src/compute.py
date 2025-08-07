@@ -276,8 +276,8 @@ def _compute_gn(
         for i, a in enumerate(alpha_list):
             alpha, val, _, _ = _worker(Job(g, n, a))
             results[alpha] = val
-            if checkpoint_fn is not None:
-                checkpoint_fn(i, alpha)
+            rx[(g, n, alpha)] = val
+            if checkpoint_fn: checkpoint_fn(i, alpha)
         return results
 
     # ---------------------------- Parallel path --------------------------------
@@ -340,8 +340,8 @@ def _compute_gn(
 
                     # Update results and checkpoint
                     results[alpha] = val
-                    if checkpoint_fn is not None:
-                        checkpoint_fn(i, alpha)
+                    rx[(g, n, alpha)] = val
+                    if checkpoint_fn: checkpoint_fn(i, alpha)
 
                     # Update worker stats
                     count, total_t, _ = worker_stats.get(pid, (0, 0.0, 0.0))
